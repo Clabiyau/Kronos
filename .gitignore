@@ -54,6 +54,11 @@ Desktop.ini
 *.pt
 *.ckpt
 *.bin
+*.safetensors
+pretrained/
+
+# Finetune / training artifacts
+finetune_ashare/outputs/
 
 # Logs
 *.log
