@@ -32,6 +32,7 @@ training:
   onecycle_pct_start: 0.15
   onecycle_div_factor: 10
   onecycle_final_div_factor: 10
+  save_epoch_checkpoints: true   # 每 epoch 另存 basemodel/epochs/epoch_XXX/（约 400MB/个）
 
 model_paths:
   pretrained_tokenizer: "./pretrained/Kronos-Tokenizer-base"

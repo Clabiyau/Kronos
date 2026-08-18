@@ -49,6 +49,28 @@ python -m finetune_ashare --config finetune_ashare/configs/mainboard_daily_lb300
 
 `--resume-predictor` 会自动跳过 Tokenizer，从 `basemodel/last` + `last_train.pt` 接着下一个 epoch。注意：续训粒度是 **epoch 级**（Ctrl+C 在 epoch 中途仍会丢掉当前 epoch 进度）。
 
+### GPU 空闲时自动训练
+
+当 GPU 持续空闲（默认：显存占用 <50% 且利用率 ≤20%，连续 30 分钟）时自动启动/续训；手动停止后再次等待空闲并 `--resume-predictor`：
+
+```bash
+# 前台（Ctrl+C 会同时停掉监控和训练）
+python -m finetune_ashare.idle_train_runner \
+  --config finetune_ashare/configs/mainboard_daily_v1.yaml \
+  --mem-threshold 0.5 --util-threshold 20 --idle-minutes 30
+
+# 后台
+nohup python -m finetune_ashare.idle_train_runner \
+  --config finetune_ashare/configs/mainboard_daily_v1.yaml \
+  --mem-threshold 0.5 --util-threshold 20 --idle-minutes 30 \
+  --log-file finetune_ashare/outputs/idle_runner.log \
+  > finetune_ashare/outputs/idle_runner.stdout.log 2>&1 &
+```
+
+停止：`kill <idle_runner_pid>`（会先 SIGTERM 训练进程）。下次 GPU 空闲满 30 分钟后自动 `--resume-predictor`。
+
+**注意：** 若节点有固定「幽灵显存」（如常驻 12GB/32GB），仅用显存比例可能一直判为空闲；可同时看 `util-threshold`，或把 `mem-threshold` 调低（如 `0.35`）。
+
 8GB 显存建议：`batch_size=16` + `accumulation_steps=4`（等效 batch 64），见 `mainboard_daily_lb300_s10k_b64.yaml`。
 
 产出目录（以 `exp_name=mainboard_daily_v1` 为例）：
@@ -58,9 +80,14 @@ finetune_ashare/outputs/mainboard_daily_v1/
   tokenizer/best_model/
   basemodel/best_e1/
   basemodel/best_loss/
+  basemodel/last/                 # 续训用（仅最近一次完成的 epoch）
+  basemodel/epochs/epoch_001/     # save_epoch_checkpoints: true 时，每 epoch 一份
+  basemodel/epochs/epoch_002/
   tb/
   metrics.json
 ```
+
+配置项 `training.save_epoch_checkpoints: true` 会在每个 predictor epoch 结束额外保存 `basemodel/epochs/epoch_XXX/`（含 `metrics.json`）。50 epoch 约需 **20GB** 磁盘；默认 `false` 不开启。
 
 ## TensorBoard
 

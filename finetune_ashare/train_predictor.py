@@ -1,6 +1,7 @@
 """Predictor fine-tuning loop with dual checkpoints (best CE loss / best e1)."""
 from __future__ import annotations
 
+import json
 import math
 import os
 import sys
@@ -108,6 +109,45 @@ def _save_predictor_resume(
         f"Resume checkpoint saved (completed epoch {epoch + 1}): "
         f"{config.basemodel_last_path} + {config.basemodel_last_train_path}"
     )
+
+
+def _save_epoch_checkpoint(
+    config: AshareFinetuneConfig,
+    model,
+    *,
+    epoch: int,
+    avg_train_loss: float,
+    avg_val_loss: float,
+    day1: dict,
+    dir_acc: float,
+    n_day1: int,
+) -> None:
+    """Save predictor weights for this epoch under basemodel/epochs/epoch_XXX/."""
+    if not config.save_epoch_checkpoints:
+        return
+
+    epoch_dir = os.path.join(
+        config.basemodel_epochs_dir, f"epoch_{epoch + 1:03d}"
+    )
+    os.makedirs(epoch_dir, exist_ok=True)
+    model.save_pretrained(epoch_dir)
+
+    pred_len = int(config.predict_window)
+    metrics = {
+        "epoch": epoch + 1,
+        "train_loss": avg_train_loss,
+        "val_loss": avg_val_loss,
+        "dir_acc": dir_acc,
+        "n_day1": n_day1,
+    }
+    for h in range(1, pred_len + 1):
+        metrics[f"e{h}_mean"] = float(day1.get(f"e{h}_mean", float("nan")))
+
+    metrics_path = os.path.join(epoch_dir, "metrics.json")
+    with open(metrics_path, "w", encoding="utf-8") as f:
+        json.dump(metrics, f, indent=2, ensure_ascii=False)
+
+    print(f"Epoch checkpoint saved to {epoch_dir}")
 
 
 def train_predictor(
@@ -367,6 +407,16 @@ def train_predictor(
             f"time={time.time() - epoch_start:.1f}s"
         )
 
+        _save_epoch_checkpoint(
+            config,
+            model,
+            epoch=epoch,
+            avg_train_loss=avg_train_loss,
+            avg_val_loss=avg_val_loss,
+            day1=day1,
+            dir_acc=dir_acc,
+            n_day1=n_day1,
+        )
         _save_predictor_resume(
             config,
             model,

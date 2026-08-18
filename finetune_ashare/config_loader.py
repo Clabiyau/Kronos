@@ -61,6 +61,7 @@ class AshareFinetuneConfig:
         self.onecycle_final_div_factor = float(
             training.get("onecycle_final_div_factor", 1e4)
         )
+        self.save_epoch_checkpoints = training.get("save_epoch_checkpoints", False)
 
         self.exp_name = model_paths.get("exp_name", "default")
         base_path = _resolve_path(model_paths.get("base_path", "./finetune_ashare/outputs"))
@@ -86,6 +87,9 @@ class AshareFinetuneConfig:
         )
         self.basemodel_last_train_path = os.path.join(
             self.base_save_path, "basemodel", "last_train.pt"
+        )
+        self.basemodel_epochs_dir = os.path.join(
+            self.base_save_path, "basemodel", "epochs"
         )
         self.tb_log_dir = os.path.join(self.base_save_path, "tb")
 
