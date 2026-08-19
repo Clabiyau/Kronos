@@ -4,7 +4,9 @@ Example (background):
   nohup python -m finetune_ashare.idle_train_runner \\
     --config finetune_ashare/configs/mainboard_daily.yaml \\
     --mem-threshold 0.5 --idle-minutes 30 \\
-    > finetune_ashare/outputs/idle_runner.log 2>&1 &
+    --log-file finetune_ashare/outputs/idle_runner.log \\
+    --train-log-file finetune_ashare/outputs/train.log \\
+    > finetune_ashare/outputs/idle_runner.stdout.log 2>&1 &
 """
 from __future__ import annotations
 
@@ -14,6 +16,7 @@ import signal
 import subprocess
 import sys
 import time
+import traceback
 from datetime import datetime, timezone
 
 from finetune_ashare.config_loader import AshareFinetuneConfig
@@ -35,7 +38,7 @@ def _query_gpu(gpu_id: int) -> tuple[int, int, int]:
         out = subprocess.check_output(
             [
                 "nvidia-smi",
-                f"--query-gpu=memory.used,memory.total,utilization.gpu",
+                "--query-gpu=memory.used,memory.total,utilization.gpu",
                 "--format=csv,noheader,nounits",
                 "-i",
                 str(gpu_id),
@@ -85,18 +88,62 @@ def _build_train_cmd(config_path: str) -> tuple[list[str], str]:
     return cmd, mode
 
 
-def run(args: argparse.Namespace) -> int:
-    log_file = args.log_file
+def _start_training(
+    args: argparse.Namespace,
+    *,
+    log_file: str | None,
+) -> subprocess.Popen | None:
+    try:
+        cmd, mode = _build_train_cmd(args.config)
+    except Exception as exc:
+        _log(f"Failed to build train command: {exc}", log_file=log_file)
+        _log(traceback.format_exc(), log_file=log_file)
+        return None
+
+    train_log_fp = None
+    popen_kwargs: dict = {}
+    if args.train_log_file:
+        os.makedirs(os.path.dirname(args.train_log_file) or ".", exist_ok=True)
+        train_log_fp = open(args.train_log_file, "a", encoding="utf-8")
+        train_log_fp.write(
+            f"\n--- train started {datetime.now().isoformat()} ({mode}) ---\n"
+        )
+        train_log_fp.flush()
+        popen_kwargs["stdout"] = train_log_fp
+        popen_kwargs["stderr"] = subprocess.STDOUT
+
     _log(
-        f"Idle runner started: mem<{args.mem_threshold:.0%}, util<={args.util_threshold}%, "
-        f"idle={args.idle_minutes}min, poll={args.poll_seconds}s, gpu={args.gpu_id}",
+        f"Idle threshold reached, starting train ({mode}) pid-pending: {' '.join(cmd)}",
+        log_file=log_file,
+    )
+    try:
+        child = subprocess.Popen(cmd, **popen_kwargs)
+    except Exception as exc:
+        _log(f"Failed to spawn training: {exc}", log_file=log_file)
+        if train_log_fp is not None:
+            train_log_fp.close()
+        return None
+
+    _log(f"Training started pid={child.pid}", log_file=log_file)
+    if args.train_log_file:
+        _log(f"Training stdout/stderr -> {args.train_log_file}", log_file=log_file)
+    return child
+
+
+def run(args: argparse.Namespace) -> int:
+    log_file = args.log_file or None
+    _log(
+        f"Idle runner started: config={args.config}, mem<{args.mem_threshold:.0%}, "
+        f"util<={args.util_threshold}%, idle={args.idle_minutes}min, "
+        f"poll={args.poll_seconds}s, gpu={args.gpu_id}, python={sys.executable}",
         log_file=log_file,
     )
 
     child: subprocess.Popen | None = None
+    training_started_at: float | None = None
 
     def _terminate_child(*_exc: object) -> None:
-        nonlocal child
+        nonlocal child, training_started_at
         if child is not None and child.poll() is None:
             _log(f"Stopping training pid={child.pid} ...", log_file=log_file)
             child.send_signal(signal.SIGTERM)
@@ -107,6 +154,7 @@ def run(args: argparse.Namespace) -> int:
                 child.wait()
             _log("Training stopped.", log_file=log_file)
         child = None
+        training_started_at = None
 
     def _handle_signal(signum: int, _frame: object) -> None:
         _log(f"Received signal {signum}, shutting down.", log_file=log_file)
@@ -121,44 +169,72 @@ def run(args: argparse.Namespace) -> int:
     consecutive_idle = 0
 
     while True:
-        if child is not None and child.poll() is not None:
-            code = child.returncode
-            _log(f"Training exited with code {code}. Waiting for idle window again.", log_file=log_file)
-            child = None
-            consecutive_idle = 0
+        try:
+            if child is not None and child.poll() is not None:
+                code = child.returncode
+                elapsed = ""
+                if training_started_at is not None:
+                    elapsed = f", ran {time.time() - training_started_at:.0f}s"
+                _log(
+                    f"Training pid={child.pid} exited with code {code}{elapsed}. "
+                    "Waiting for idle window again.",
+                    log_file=log_file,
+                )
+                child = None
+                training_started_at = None
+                consecutive_idle = 0
 
-        if child is None:
-            try:
+            if child is None:
                 idle, detail = _is_idle(
                     args.gpu_id,
                     mem_threshold=args.mem_threshold,
                     util_threshold=args.util_threshold,
                 )
-            except RuntimeError as exc:
-                _log(f"GPU query error: {exc}", log_file=log_file)
-                time.sleep(poll)
-                continue
-
-            if idle:
-                consecutive_idle += poll
-                if consecutive_idle >= idle_seconds_needed:
-                    cmd, mode = _build_train_cmd(args.config)
-                    _log(f"Idle for {consecutive_idle}s, starting train ({mode}): {' '.join(cmd)}", log_file=log_file)
-                    child = subprocess.Popen(cmd)
+                if idle:
+                    consecutive_idle += poll
+                    if consecutive_idle >= idle_seconds_needed:
+                        child = _start_training(args, log_file=log_file)
+                        consecutive_idle = 0
+                        if child is not None:
+                            training_started_at = time.time()
+                            time.sleep(3)
+                            if child.poll() is not None:
+                                _log(
+                                    f"Training pid={child.pid} exited immediately "
+                                    f"with code {child.returncode}. "
+                                    f"Check --train-log-file for errors.",
+                                    log_file=log_file,
+                                )
+                                child = None
+                                training_started_at = None
+                    else:
+                        remaining = idle_seconds_needed - consecutive_idle
+                        _log(
+                            f"Idle {consecutive_idle}/{idle_seconds_needed}s ({detail}); "
+                            f"~{remaining}s left",
+                            log_file=log_file,
+                        )
+                else:
+                    if consecutive_idle > 0:
+                        _log(f"GPU busy, reset idle timer. {detail}", log_file=log_file)
+                    else:
+                        _log(f"Waiting... {detail}", log_file=log_file)
                     consecutive_idle = 0
-                else:
-                    remaining = idle_seconds_needed - consecutive_idle
-                    _log(f"Idle {consecutive_idle}/{idle_seconds_needed}s ({detail}); ~{remaining}s left", log_file=log_file)
-            else:
-                if consecutive_idle > 0:
-                    _log(f"GPU busy, reset idle timer. {detail}", log_file=log_file)
-                else:
-                    _log(f"Waiting... {detail}", log_file=log_file)
-                consecutive_idle = 0
 
-        else:
-            # Training is running; stop manually via Ctrl+C / kill (runner forwards SIGTERM).
-            pass
+            else:
+                elapsed_min = int((time.time() - (training_started_at or time.time())) / 60)
+                mem_used, mem_total, util = _query_gpu(args.gpu_id)
+                _log(
+                    f"Training running pid={child.pid}, ~{elapsed_min}min, "
+                    f"gpu mem={mem_used}/{mem_total}MiB util={util}%",
+                    log_file=log_file,
+                )
+
+        except RuntimeError as exc:
+            _log(f"Loop error: {exc}", log_file=log_file)
+        except Exception as exc:
+            _log(f"Unexpected loop error: {exc}", log_file=log_file)
+            _log(traceback.format_exc(), log_file=log_file)
 
         time.sleep(poll)
 
@@ -196,7 +272,12 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--log-file",
         default="",
-        help="Optional log file path (append)",
+        help="Monitor log file path (append)",
+    )
+    parser.add_argument(
+        "--train-log-file",
+        default="",
+        help="Training subprocess stdout/stderr log (append)",
     )
     args = parser.parse_args(argv)
 
