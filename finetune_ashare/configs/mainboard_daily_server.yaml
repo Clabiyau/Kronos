@@ -1,4 +1,4 @@
-# 服务器默认配置（lookback=300, 50×2000 steps, batch 32×2=64）
+# 服务器配置（lookback=300, 50×2000 steps, batch 32×2=64）
 # 使用前请改 data.db_path 为本机 kline.db 绝对路径
 data:
   db_path: "/data-qfs/yangbin/storage/kline.db"

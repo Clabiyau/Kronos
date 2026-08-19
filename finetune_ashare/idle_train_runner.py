@@ -2,7 +2,7 @@
 
 Example (background):
   nohup python -m finetune_ashare.idle_train_runner \\
-    --config finetune_ashare/configs/mainboard_daily.yaml \\
+    --config finetune_ashare/configs/mainboard_daily_server.yaml \\
     --mem-threshold 0.5 --idle-minutes 30 \\
     --log-file finetune_ashare/outputs/idle_runner.log \\
     --train-log-file finetune_ashare/outputs/train.log \\
