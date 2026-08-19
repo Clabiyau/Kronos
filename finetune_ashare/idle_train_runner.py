@@ -74,7 +74,7 @@ def _is_idle(
 
 def _build_train_cmd(config_path: str) -> tuple[list[str], str]:
     config = AshareFinetuneConfig(config_path)
-    cmd = [sys.executable, "-m", "finetune_ashare", "--config", config_path]
+    cmd = [sys.executable, "-u", "-m", "finetune_ashare", "--config", config_path]
     if os.path.isfile(config.basemodel_last_train_path):
         cmd.append("--resume-predictor")
         mode = "resume-predictor"
@@ -104,13 +104,15 @@ def _start_training(
     popen_kwargs: dict = {}
     if args.train_log_file:
         os.makedirs(os.path.dirname(args.train_log_file) or ".", exist_ok=True)
-        train_log_fp = open(args.train_log_file, "a", encoding="utf-8")
+        train_log_fp = open(args.train_log_file, "a", encoding="utf-8", buffering=1)
         train_log_fp.write(
             f"\n--- train started {datetime.now().isoformat()} ({mode}) ---\n"
         )
         train_log_fp.flush()
         popen_kwargs["stdout"] = train_log_fp
         popen_kwargs["stderr"] = subprocess.STDOUT
+
+    popen_kwargs["env"] = {**os.environ, "PYTHONUNBUFFERED": "1"}
 
     _log(
         f"Idle threshold reached, starting train ({mode}) pid-pending: {' '.join(cmd)}",
