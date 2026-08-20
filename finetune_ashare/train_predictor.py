@@ -236,6 +236,10 @@ def train_predictor(
         f"effective_batch={config.batch_size * accum}, "
         f"samples/epoch={len(train_dataset)}, micro_batches/epoch={len(train_loader)}"
     )
+    print(
+        f"Predictor checkpoints: save_epoch_checkpoints={config.save_epoch_checkpoints}, "
+        f"epochs_dir={config.basemodel_epochs_dir}"
+    )
 
     optimizer = torch.optim.AdamW(
         model.parameters(),
