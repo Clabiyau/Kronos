@@ -1,7 +1,5 @@
-# 服务器配置（lookback=300, 50×2000 steps, batch 32×2=64）
-# 使用前请改 data.db_path 为本机 kline.db 绝对路径
 data:
-  db_path: "/data-qfs/yangbin/storage/kline.db"
+  db_path: "/data-qfs/yangbin/Data/kline/kline.db"
   lookback_window: 300
   predict_window: 5
   max_context: 512
@@ -16,23 +14,22 @@ split:
 training:
   tokenizer_epochs: 5
   basemodel_epochs: 50
-  batch_size: 32
+  batch_size: 64
   log_interval: 200
-  num_workers: 4
+  num_workers: 0
   seed: 42
   tokenizer_learning_rate: 0.0002
   predictor_learning_rate: 0.00002
   adam_beta1: 0.9
   adam_beta2: 0.95
   adam_weight_decay: 0.1
-  accumulation_steps: 2
+  accumulation_steps: 1
   n_train_steps_per_epoch: 2000
   n_val_loss_batches: 50
   n_val_day1_samples: 128
   onecycle_pct_start: 0.15
   onecycle_div_factor: 10
   onecycle_final_div_factor: 10
-  save_epoch_checkpoints: true
 
 model_paths:
   pretrained_tokenizer: "./pretrained/Kronos-Tokenizer-base"
